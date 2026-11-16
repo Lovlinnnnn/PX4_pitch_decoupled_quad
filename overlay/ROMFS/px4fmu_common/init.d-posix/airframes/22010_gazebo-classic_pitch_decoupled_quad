@@ -1,0 +1,66 @@
+#!/bin/sh
+#
+# @name Pitch-decoupled quad SITL (external common tilt)
+#
+# @type Quadrotor Wide
+# @class Copter
+#
+# @output MAIN1 motor 1
+# @output MAIN2 motor 2
+# @output MAIN3 motor 3
+# @output MAIN4 motor 4
+#
+
+. ${R}etc/init.d/rc.mc_defaults
+
+# Fixed-axis multirotor allocation for the zero-tilt flight baseline.
+# Gazebo drives the tilt joints. PX4 maps MAIN1 through MAIN4 to the four motors.
+param set-default CA_AIRFRAME 0
+param set-default MAV_TYPE 2
+param set-default MAV_PROTO_VER 2
+param set-default CA_ROTOR_COUNT 4
+
+# Geometry is in body FRD and follows the SDF rotor_0..3 motor order.
+# These are equivalent thrust-line points, not the zero-tilt motor centers:
+# remove each rotor's local-Y axial offset before transforming to FRD.
+# The mass reference also removes the local-Y axial offsets of all moving
+# masses, while retaining base and fixed sensor centers of mass. Thus its
+# difference from the instantaneous whole-model CoM is parallel to the
+# common thrust direction and does not change the thrust moment.
+#
+# SDF mass (including IMU/GPS/magnetometer): 1.54166 kg.
+# Fixed mass anchor in model FRD: (0.005113035, -0.003752002, 0.014318394) m.
+# Tiny radial offsets and rounded SDF RPY angles leave at most 0.000021 m
+# equivalent moment-arm error in the sampled [-35, 35] degree range.
+# Recompute this geometry if the model masses or joint/rotor poses change.
+# Motor reaction torque matches SDF momentConstant=0.09 and ccw/ccw/cw/cw.
+param set-default CA_ROTOR0_PX 0.235554551
+param set-default CA_ROTOR0_PY 0.243601002
+param set-default CA_ROTOR0_PZ 0.006249418
+param set-default CA_ROTOR0_KM 0.09
+
+param set-default CA_ROTOR1_PX -0.245547724
+param set-default CA_ROTOR1_PY -0.237003998
+param set-default CA_ROTOR1_PZ 0.006275652
+param set-default CA_ROTOR1_KM 0.09
+
+param set-default CA_ROTOR2_PX 0.235552276
+param set-default CA_ROTOR2_PY -0.237098998
+param set-default CA_ROTOR2_PZ 0.006247652
+param set-default CA_ROTOR2_KM -0.09
+
+param set-default CA_ROTOR3_PX -0.245521449
+param set-default CA_ROTOR3_PY 0.243696002
+param set-default CA_ROTOR3_PZ 0.006277418
+param set-default CA_ROTOR3_KM -0.09
+
+# Zero-tilt axes are (0, 0, -1), the multirotor parameter defaults.
+# SimulatorMavlink uses PWM_MAIN functions for Gazebo Classic channels.
+param set-default PWM_MAIN_FUNC1 101
+param set-default PWM_MAIN_FUNC2 102
+param set-default PWM_MAIN_FUNC3 103
+param set-default PWM_MAIN_FUNC4 104
+param set-default PWM_MAIN_FUNC5 0
+param set-default PWM_MAIN_FUNC6 0
+param set-default PWM_MAIN_FUNC7 0
+param set-default PWM_MAIN_FUNC8 0

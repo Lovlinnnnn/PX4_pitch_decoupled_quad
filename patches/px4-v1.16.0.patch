@@ -1,0 +1,878 @@
+diff --git a/ROMFS/px4fmu_common/init.d-posix/airframes/CMakeLists.txt b/ROMFS/px4fmu_common/init.d-posix/airframes/CMakeLists.txt
+index b4e107799fd05ff2ddce3e7309ff4c3f22b380ca..48559fc6f953af32d4e1687374d2c670e235fa80 100644
+--- a/ROMFS/px4fmu_common/init.d-posix/airframes/CMakeLists.txt
++++ b/ROMFS/px4fmu_common/init.d-posix/airframes/CMakeLists.txt
+@@ -105,6 +105,10 @@ px4_add_romfs_files(
+ 	10019_gazebo-classic_omnicopter
+ 	10030_gazebo-classic_px4vision
+ 
++	22010_gazebo-classic_pitch_decoupled_quad
++	22011_gazebo-classic_pitch_decoupled_quad_bench
++	22012_gazebo-classic_pitch_decoupled_quad_flight
++
+ 	10040_sihsim_quadx
+ 	10041_sihsim_airplane
+ 	10042_sihsim_xvert
+diff --git a/ROMFS/px4fmu_common/init.d-posix/rcS b/ROMFS/px4fmu_common/init.d-posix/rcS
+index ddb970382809d9b0d3f38180718eb4eba073b563..7ba81469d9fa632c0feab4bb33cef5430a3de91d 100644
+--- a/ROMFS/px4fmu_common/init.d-posix/rcS
++++ b/ROMFS/px4fmu_common/init.d-posix/rcS
+@@ -67,6 +67,26 @@ fi
+ set PARAM_FILE parameters.bson
+ set PARAM_BACKUP_FILE parameters_backup.bson
+ 
++if [ "$SYS_AUTOSTART" = "22011" ]
++then
++	if [ "$PX4_SHARED_TILT_FIXED_BENCH" != "1" ] || [ ! -d "$PX4_SHARED_TILT_BENCH_RUN_DIR" ]
++	then
++		echo "ERROR [init] 22011 requires the fixed-body Gazebo bench launcher"
++		exit 1
++	fi
++	PARAM_FILE="$PX4_SHARED_TILT_BENCH_RUN_DIR/parameters.bson"
++	PARAM_BACKUP_FILE="$PX4_SHARED_TILT_BENCH_RUN_DIR/parameters_backup.bson"
++elif [ "$SYS_AUTOSTART" = "22012" ]
++then
++	if [ "$PX4_SHARED_TILT_FLIGHT" != "1" ] || [ ! -d "$PX4_SHARED_TILT_FLIGHT_RUN_DIR" ]
++	then
++		echo "ERROR [init] 22012 requires the shared-tilt Gazebo flight launcher"
++		exit 1
++	fi
++	PARAM_FILE="$PX4_SHARED_TILT_FLIGHT_RUN_DIR/parameters.bson"
++	PARAM_BACKUP_FILE="$PX4_SHARED_TILT_FLIGHT_RUN_DIR/parameters_backup.bson"
++fi
++
+ param select $PARAM_FILE
+ if [ -f $PARAM_FILE ]; then
+ 
+@@ -236,7 +256,13 @@ then
+ 	exit 1
+ fi
+ 
+-dataman start
++if [ "$SYS_AUTOSTART" = "22011" ] || [ "$SYS_AUTOSTART" = "22012" ] ||
++	{ [ "$SYS_AUTOSTART" = "22010" ] && [ "$PX4_SHARED_TILT_SHADOW" = "1" ]; }
++then
++	dataman start -r
++else
++	dataman start
++fi
+ 
+ # only start the simulator if not in replay mode, as both control the lockstep time
+ if ! replay tryapplyparams
+diff --git a/ROMFS/px4fmu_common/init.d/rc.mc_apps b/ROMFS/px4fmu_common/init.d/rc.mc_apps
+index d5d9989c8666b20bfcaf2f257802f5adcb923eb3..94ef0cc95fc05c8b976d97df36681dce22b56362 100644
+--- a/ROMFS/px4fmu_common/init.d/rc.mc_apps
++++ b/ROMFS/px4fmu_common/init.d/rc.mc_apps
+@@ -8,7 +8,10 @@
+ #
+ # Start Control Allocator
+ #
+-control_allocator start
++if ! param compare SYS_AUTOSTART 22011
++then
++	control_allocator start
++fi
+ 
+ #
+ # Start Multicopter Rate Controller.
+@@ -28,9 +31,19 @@ fi
+ #
+ # Start Multicopter Position Controller.
+ #
+-mc_hover_thrust_estimator start
+-flight_mode_manager start
+-mc_pos_control start
++if param compare SYS_AUTOSTART 22011 || param compare SYS_AUTOSTART 22012
++then
++	flight_mode_manager start
++	shared_tilt_control start
++else
++	mc_hover_thrust_estimator start
++	flight_mode_manager start
++	mc_pos_control start
++	if param compare SYS_AUTOSTART 22010 && [ "$PX4_SHARED_TILT_SHADOW" = "1" ]
++	then
++		shared_tilt_control start
++	fi
++fi
+ 
+ #
+ # Start Multicopter Land Detector.
+diff --git a/Tools/simulation/gazebo-classic/setup_gazebo.bash b/Tools/simulation/gazebo-classic/setup_gazebo.bash
+index 7829c929c654354bebcf3b85ce96c3173278337a..5c07f164de991528332dcb57033c960ea68b423a 100755
+--- a/Tools/simulation/gazebo-classic/setup_gazebo.bash
++++ b/Tools/simulation/gazebo-classic/setup_gazebo.bash
+@@ -17,7 +17,7 @@ BUILD_DIR=$2
+ 
+ # setup Gazebo env and update package path
+ export GAZEBO_PLUGIN_PATH=$GAZEBO_PLUGIN_PATH:${BUILD_DIR}/build_gazebo-classic
+-export GAZEBO_MODEL_PATH=$GAZEBO_MODEL_PATH:${SRC_DIR}/Tools/simulation/gazebo-classic/sitl_gazebo-classic/models
++export GAZEBO_MODEL_PATH="${SRC_DIR}/Tools/simulation/gazebo-classic/models${GAZEBO_MODEL_PATH:+:${GAZEBO_MODEL_PATH}}:${SRC_DIR}/Tools/simulation/gazebo-classic/sitl_gazebo-classic/models"
+ export LD_LIBRARY_PATH=$LD_LIBRARY_PATH:${BUILD_DIR}/build_gazebo-classic
+ 
+ echo -e "GAZEBO_PLUGIN_PATH $GAZEBO_PLUGIN_PATH"
+diff --git a/Tools/simulation/gazebo-classic/sitl_run.sh b/Tools/simulation/gazebo-classic/sitl_run.sh
+index 741d064dd6287bca33c0ee9fa812022658fc6d0a..6bad2337f61a728a0aa32d6300c48298a777f328 100755
+--- a/Tools/simulation/gazebo-classic/sitl_run.sh
++++ b/Tools/simulation/gazebo-classic/sitl_run.sh
+@@ -30,6 +30,40 @@ echo build_path: $build_path
+ rootfs="$build_path/rootfs" # this is the working directory
+ mkdir -p "$rootfs"
+ 
++unset PX4_SHARED_TILT_FIXED_BENCH PX4_SHARED_TILT_BENCH_RUN_DIR PX4_SHARED_TILT_FLIGHT PX4_SHARED_TILT_FLIGHT_RUN_DIR
++shared_tilt_profile=0
++if [[ "$PX4_SYS_AUTOSTART" == "22011" || "$PX4_SYS_AUTOSTART" == "22012" ]]; then
++	if [[ "$model" != "pitch_decoupled_quad" ]]; then
++		echo "22011 and 22012 require the pitch_decoupled_quad model."
++		exit 1
++	fi
++	shared_tilt_profile=1
++fi
++
++# Keep the two lockstep peers on the same vCPU for the VirtualBox flight profile.
++sim_affinity=()
++gui_env=()
++if [[ "$PX4_SYS_AUTOSTART" == "22012" && "$debugger" == "none" && -r /sys/class/dmi/id/product_name ]] &&
++   [[ $(< /sys/class/dmi/id/product_name) == "VirtualBox" ]] && command -v taskset >/dev/null &&
++   read -r sim_cpu gui_cpus < <(python3 -B -c '
++import os
++
++cpus = sorted(os.sched_getaffinity(0))
++sim_cpu = cpus[1] if len(cpus) > 1 else cpus[0]
++# On guests with enough vCPUs, give the GUI two vCPUs away from lockstep.
++gui_cpus = ",".join(map(str, cpus[3:5])) if len(cpus) >= 5 else ""
++print(sim_cpu, gui_cpus)
++') &&
++   taskset -c "$sim_cpu" true 2>/dev/null; then
++	sim_affinity=(taskset -c "$sim_cpu")
++	# Keep LLVMpipe's rendering workers from competing with the lockstep peers.
++	gui_env=(env "LP_NUM_THREADS=${LP_NUM_THREADS:-1}")
++	if [[ -n "$gui_cpus" ]] && taskset -c "$gui_cpus" true 2>/dev/null; then
++		gui_env=(taskset -c "$gui_cpus" "${gui_env[@]}")
++	fi
++	echo "Gazebo/PX4 lockstep on VirtualBox vCPU $sim_cpu"
++fi
++
+ # To disable user input
+ if [[ -n "$NO_PXH" ]]; then
+ 	no_pxh=-d
+@@ -51,8 +85,14 @@ else
+     follow_mode=""
+ fi
+ 
+-# To use gazebo_ros ROS2 plugins
+-if [[ -n "$ROS_VERSION" ]] && [ "$ROS_VERSION" == "2" ]; then
++# Load the ROS 1 system plugin before the shared-tilt model plugin.
++if [[ "$model" == "pitch_decoupled_quad" ]]; then
++	if [[ "$ROS_VERSION" != "1" ]]; then
++		echo "Source the ROS Noetic environment before starting pitch_decoupled_quad."
++		exit 1
++	fi
++	ros_args="-s libgazebo_ros_api_plugin.so"
++elif [[ "$ROS_VERSION" == "2" ]]; then
+ 	ros_args="-s libgazebo_ros_init.so -s libgazebo_ros_factory.so"
+ else
+ 	ros_args=""
+@@ -63,9 +103,10 @@ if [ "$model" == "" ] || [ "$model" == "none" ]; then
+ 	model="iris"
+ fi
+ 
+-# kill process names that might stil
+-# be running from last time
+-pkill -x gazebo || true
++# For the normal interactive launcher, close a leftover Gazebo UI from a prior run.
++if [[ "$shared_tilt_profile" == "0" && "$PX4_SHARED_TILT_SHADOW" != "1" ]]; then
++	pkill -x gazebo || true
++fi
+ 
+ export PX4_SIM_MODEL=gazebo-classic_${model}
+ export PX4_SIM_WORLD=${world}
+@@ -78,6 +119,9 @@ if [ -x "$(command -v gazebo)" ]; then
+ 
+ 	# Set the plugin path so Gazebo finds our model and sim
+ 	source "$src_path/Tools/simulation/gazebo-classic/setup_gazebo.bash" "${src_path}" "${build_path}"
++	if [[ "$model" == "pitch_decoupled_quad" ]]; then
++		export GAZEBO_PLUGIN_PATH="${build_path}/build_gazebo-classic_tilt_servo:${GAZEBO_PLUGIN_PATH}"
++	fi
+ 	if [ -z $PX4_SITL_WORLD ]; then
+ 		#Spawn predefined world
+ 		if [ "$world" == "none" ]; then
+@@ -101,8 +145,18 @@ if [ -x "$(command -v gazebo)" ]; then
+ 			world_path="$PX4_SITL_WORLD"
+ 		fi
+ 	fi
+-	gzserver $verbose $world_path $ros_args &
++	"${sim_affinity[@]}" gzserver $verbose $world_path $ros_args &
+ 	SIM_PID=$!
++	if [[ "$shared_tilt_profile" == "1" ]]; then
++		cleanup_shared_tilt() {
++			kill "$SIM_PID" ${GUI_PID:+"$GUI_PID"} 2>/dev/null || true
++			if [[ -n "$shared_tilt_run_dir" ]]; then
++				rm -f -- "$shared_tilt_run_dir/parameters.bson" "$shared_tilt_run_dir/parameters_backup.bson"
++				rmdir -- "$shared_tilt_run_dir"
++			fi
++		}
++		trap cleanup_shared_tilt EXIT
++	fi
+ 
+ 	# Check all paths in ${GAZEBO_MODEL_PATH} for specified model
+ 	IFS_bak=$IFS
+@@ -127,10 +181,25 @@ if [ -x "$(command -v gazebo)" ]; then
+ 		echo "Using: ${modelpath}/${model}/${model}.sdf"
+ 	fi
+ 
+-	while gz model --verbose --spawn-file="${modelpath}/${model}/${model_name}.sdf" --model-name=${model} -x 1.01 -y 0.98 -z 0.83 2>&1 | grep -q "An instance of Gazebo is not running."; do
+-		echo "gzserver not ready yet, trying again!"
+-		sleep 1
+-	done
++	if [[ "$PX4_SYS_AUTOSTART" == "22011" ]]; then
++		python3 -B "$src_path/tilting_migration/tests/verify_shared_tilt_bench.py" --spawn-fixed "${modelpath}/${model}/${model_name}.sdf"
++		shared_tilt_run_dir=$(mktemp -d /dev/shm/px4-shared-tilt-bench.XXXXXXXX)
++		export PX4_SHARED_TILT_BENCH_RUN_DIR="$shared_tilt_run_dir" PX4_SHARED_TILT_FIXED_BENCH=1
++	elif [[ "$PX4_SYS_AUTOSTART" == "22012" ]]; then
++		(
++			set -o pipefail
++			sdf_file="${modelpath}/${model}/${model_name}.sdf"
++			python3 -B "$src_path/Tools/simulation/gazebo-classic/configure_22012_tilt.py" "$sdf_file" |
++				timeout 90s rosrun gazebo_ros spawn_model -sdf -stdin -model "$model" -robot_namespace "" -x 1.01 -y 0.98 -z 0.83
++		)
++		shared_tilt_run_dir=$(mktemp -d /dev/shm/px4-shared-tilt-flight.XXXXXXXX)
++		export PX4_SHARED_TILT_FLIGHT_RUN_DIR="$shared_tilt_run_dir" PX4_SHARED_TILT_FLIGHT=1
++	else
++		while gz model --verbose --spawn-file="${modelpath}/${model}/${model_name}.sdf" --model-name=${model} -x 1.01 -y 0.98 -z 0.83 2>&1 | grep -q "An instance of Gazebo is not running."; do
++			echo "gzserver not ready yet, trying again!"
++			sleep 1
++		done
++	fi
+ 
+ 	if [[ -n "$HEADLESS" ]]; then
+ 		echo "not running gazebo gui"
+@@ -138,7 +207,7 @@ if [ -x "$(command -v gazebo)" ]; then
+ 		# gzserver needs to be running to avoid a race. Since the launch
+ 		# is putting it into the background we need to avoid it by backing off
+ 		sleep 3
+-		nice -n 20 gzclient --verbose $follow_mode &
++		"${gui_env[@]}" nice -n 20 gzclient --verbose $follow_mode &
+ 		GUI_PID=$!
+ 	fi
+ else
+@@ -164,11 +233,15 @@ elif [ "$debugger" == "valgrind" ]; then
+ elif [ "$debugger" == "callgrind" ]; then
+ 	eval valgrind --tool=callgrind -v $sitl_command
+ else
+-	eval $sitl_command
++	"${sim_affinity[@]}" "$sitl_bin" ${no_pxh:+"$no_pxh"} "$build_path/etc"
+ fi
++sitl_status=$?
+ 
+ popd >/dev/null
+ 
++if [[ "$shared_tilt_profile" == "1" ]]; then
++	exit "$sitl_status"
++fi
+ 
+ kill -9 $SIM_PID
+ if [[ ! -n "$HEADLESS" ]]; then
+diff --git a/boards/px4/sitl/default.px4board b/boards/px4/sitl/default.px4board
+index f85c03e23a2a73b8a1b47c14d70217201adee3dd..a5e9a06c2fac56f3664b1edd886e1c95407fa0bf 100644
+--- a/boards/px4/sitl/default.px4board
++++ b/boards/px4/sitl/default.px4board
+@@ -50,6 +50,7 @@ CONFIG_MODULES_ROVER_DIFFERENTIAL=y
+ CONFIG_MODULES_ROVER_MECANUM=y
+ CONFIG_MODULES_ROVER_POS_CONTROL=y
+ CONFIG_MODULES_SENSORS=y
++CONFIG_MODULES_SHARED_TILT_CONTROL=y
+ CONFIG_COMMON_SIMULATION=y
+ CONFIG_MODULES_SIMULATION_GZ_MSGS=y
+ CONFIG_MODULES_SIMULATION_GZ_BRIDGE=y
+diff --git a/msg/CMakeLists.txt b/msg/CMakeLists.txt
+index 4d5a19cfa0e47b0467a377027b34c02499c366b4..c07f2bac0147d2a64c76f62fb546317013d29f9c 100644
+--- a/msg/CMakeLists.txt
++++ b/msg/CMakeLists.txt
+@@ -209,6 +209,10 @@ set(msg_files
+ 	TaskStackInfo.msg
+ 	TecsStatus.msg
+ 	TelemetryStatus.msg
++	TiltingMcDesiredAngles.msg
++	TiltingServoSp.msg
++	TiltingServoStatus.msg
++	SharedTiltAllocationSetpoint.msg
+ 	TiltrotorExtraControls.msg
+ 	TimesyncStatus.msg
+ 	TrajectorySetpoint6dof.msg
+diff --git a/src/lib/CMakeLists.txt b/src/lib/CMakeLists.txt
+index 6454c9e40ce740924d818c1f8cd77bceb673f3e7..a0d0e9fd0338980472e93c21a9d8f17d24eeab3a 100644
+--- a/src/lib/CMakeLists.txt
++++ b/src/lib/CMakeLists.txt
+@@ -71,6 +71,7 @@ add_subdirectory(ringbuffer EXCLUDE_FROM_ALL)
+ add_subdirectory(rover_control EXCLUDE_FROM_ALL)
+ add_subdirectory(rtl EXCLUDE_FROM_ALL)
+ add_subdirectory(sensor_calibration EXCLUDE_FROM_ALL)
++add_subdirectory(shared_tilt_control EXCLUDE_FROM_ALL)
+ add_subdirectory(slew_rate EXCLUDE_FROM_ALL)
+ add_subdirectory(stick_yaw EXCLUDE_FROM_ALL)
+ add_subdirectory(systemlib EXCLUDE_FROM_ALL)
+diff --git a/src/modules/control_allocator/ControlAllocator.cpp b/src/modules/control_allocator/ControlAllocator.cpp
+index a7e43a64e388c6553cf1a6cef57533301ecb6783..08378d0550fdbce69654f313631e5304429d2fbf 100644
+--- a/src/modules/control_allocator/ControlAllocator.cpp
++++ b/src/modules/control_allocator/ControlAllocator.cpp
+@@ -41,6 +41,7 @@
+ 
+ #include "ControlAllocator.hpp"
+ 
++#include <ActuatorEffectivenessSharedTilt.hpp>
+ #include <drivers/drv_hrt.h>
+ #include <circuit_breaker/circuit_breaker.h>
+ #include <mathlib/math/Limits.hpp>
+@@ -95,6 +96,12 @@ ControlAllocator::init()
+ 		return false;
+ 	}
+ 
++	if (_effectiveness_source_id == EffectivenessSource::SHARED_TILT && !_shared_tilt_setpoint_sub.registerCallback()) {
++		_vehicle_torque_setpoint_sub.unregisterCallback();
++		PX4_ERR("shared tilt callback registration failed");
++		return false;
++	}
++
+ #ifndef ENABLE_LOCKSTEP_SCHEDULER // Backup schedule would interfere with lockstep
+ 	ScheduleDelayed(50_ms);
+ #endif
+@@ -249,6 +256,10 @@ ControlAllocator::update_effectiveness_source()
+ 			tmp = new ActuatorEffectivenessMCTilt(this);
+ 			break;
+ 
++		case EffectivenessSource::SHARED_TILT:
++			tmp = new ActuatorEffectivenessSharedTilt(this);
++			break;
++
+ 		case EffectivenessSource::CUSTOM:
+ 			tmp = new ActuatorEffectivenessCustom(this);
+ 			break;
+@@ -304,6 +315,7 @@ ControlAllocator::Run()
+ {
+ 	if (should_exit()) {
+ 		_vehicle_torque_setpoint_sub.unregisterCallback();
++		_shared_tilt_setpoint_sub.unregisterCallback();
+ 		exit_and_cleanup();
+ 		return;
+ 	}
+@@ -313,6 +325,10 @@ ControlAllocator::Run()
+ #ifndef ENABLE_LOCKSTEP_SCHEDULER // Backup schedule would interfere with lockstep
+ 	// Push backup schedule
+ 	ScheduleDelayed(50_ms);
++#else
++	if (_effectiveness_source_id == EffectivenessSource::SHARED_TILT) {
++		ScheduleDelayed(50_ms);
++	}
+ #endif
+ 
+ 	// Check if parameters have changed
+@@ -387,6 +403,7 @@ ControlAllocator::Run()
+ 
+ 		do_update = true;
+ 		_timestamp_sample = vehicle_torque_setpoint.timestamp_sample;
++		_torque_timestamp = vehicle_torque_setpoint.timestamp;
+ 
+ 	}
+ 
+@@ -394,12 +411,20 @@ ControlAllocator::Run()
+ 		_thrust_sp = matrix::Vector3f(vehicle_thrust_setpoint.xyz);
+ 	}
+ 
++	const bool shared_tilt = _effectiveness_source_id == EffectivenessSource::SHARED_TILT;
++
++	if (shared_tilt) {
++		do_update = update_shared_tilt_setpoint(do_update);
++	}
++
+ 	if (do_update) {
+ 		_last_run = now;
+ 
+ 		check_for_motor_failures();
+ 
+-		update_effectiveness_matrix_if_needed(EffectivenessUpdateReason::NO_EXTERNAL_UPDATE);
++		if (!shared_tilt) {
++			update_effectiveness_matrix_if_needed(EffectivenessUpdateReason::NO_EXTERNAL_UPDATE);
++		}
+ 
+ 		// Set control setpoint vector(s)
+ 		matrix::Vector<float, NUM_AXES> c[ActuatorEffectiveness::MAX_NUM_MATRICES];
+@@ -460,12 +485,62 @@ ControlAllocator::Run()
+ 	perf_end(_loop_perf);
+ }
+ 
++bool
++ControlAllocator::update_shared_tilt_setpoint(bool torque_updated)
++{
++	const bool request_updated = _shared_tilt_setpoint_sub.update(&_shared_tilt_request);
++	const auto &request = _shared_tilt_request;
++	const hrt_abstime now = hrt_absolute_time();
++
++	if (!_armed || !_publish_controls || request.timestamp == 0 || request.timestamp > now
++	    || now - request.timestamp >= 100_ms) {
++		_shared_tilt_outputs_enabled = false;
++		return false;
++	}
++
++	if (request.mode == shared_tilt_allocation_setpoint_s::HOLD) {
++		return false; // Keep the last bounded output and allocation status during the outer loop's grace period.
++	}
++
++	if (request.mode != shared_tilt_allocation_setpoint_s::ACTIVE
++	    || request.timestamp_sample == 0 || request.timestamp_sample > request.timestamp
++	    || !PX4_ISFINITE(request.tilt_rad) || fabsf(request.tilt_rad) > math::radians(60.f)
++	    || !PX4_ISFINITE(request.collective) || request.collective < 0.f
++	    || _torque_timestamp == 0 || _torque_timestamp > now || now - _torque_timestamp >= 100_ms
++	    || !_torque_sp.isAllFinite()) {
++		_shared_tilt_outputs_enabled = false;
++		return false;
++	}
++
++	auto &effectiveness = static_cast<ActuatorEffectivenessSharedTilt &>(*_actuator_effectiveness);
++
++	// Rebuild before allocating so the matrix and projected force use the same actual angle.
++	if (!(fabsf(effectiveness.matrixTilt() - request.tilt_rad) <= FLT_EPSILON)) {
++		effectiveness.setTilt(request.tilt_rad);
++		update_effectiveness_matrix_if_needed(EffectivenessUpdateReason::NO_EXTERNAL_UPDATE);
++
++		if (!(fabsf(effectiveness.matrixTilt() - request.tilt_rad) <= FLT_EPSILON)) {
++			_shared_tilt_outputs_enabled = false;
++			return false;
++		}
++
++	} else if (!request_updated && !torque_updated && _shared_tilt_outputs_enabled) {
++		return false;
++	}
++
++	_thrust_sp = ActuatorEffectivenessSharedTilt::thrustAxis(request.tilt_rad) * request.collective;
++	_shared_tilt_sample_us = request.timestamp_sample;
++	_shared_tilt_outputs_enabled = true;
++	return true;
++}
++
+ void
+ ControlAllocator::update_effectiveness_matrix_if_needed(EffectivenessUpdateReason reason)
+ {
+ 	ActuatorEffectiveness::Configuration config{};
+ 
+ 	if (reason == EffectivenessUpdateReason::NO_EXTERNAL_UPDATE
++	    && _effectiveness_source_id != EffectivenessSource::SHARED_TILT
+ 	    && hrt_elapsed_time(&_last_effectiveness_update) < 100_ms) { // rate-limit updates
+ 		return;
+ 	}
+@@ -568,7 +643,7 @@ ControlAllocator::update_effectiveness_matrix_if_needed(EffectivenessUpdateReaso
+ 
+ 			ActuatorEffectiveness::EffectivenessMatrix &matrix = config.effectiveness_matrices[i];
+ 
+-			for (int n = 0; n < NUM_AXES; n++) {
++			for (int n = 0; n < NUM_AXES && _effectiveness_source_id != EffectivenessSource::SHARED_TILT; n++) {
+ 				bool all_entries_small = true;
+ 
+ 				for (int m = 0; m < config.num_actuators_matrix[i]; m++) {
+@@ -586,6 +661,14 @@ ControlAllocator::update_effectiveness_matrix_if_needed(EffectivenessUpdateReaso
+ 			int total_num_actuators = config.num_actuators_matrix[i];
+ 			_control_allocation[i]->setEffectivenessMatrix(config.effectiveness_matrices[i], config.trim[i],
+ 					config.linearization_point[i], total_num_actuators, reason == EffectivenessUpdateReason::CONFIGURATION_UPDATE);
++
++			if (_effectiveness_source_id == EffectivenessSource::SHARED_TILT
++			    && reason == EffectivenessUpdateReason::CONFIGURATION_UPDATE) {
++				// The pseudoinverse is lazy. Establish its normalization while the installed matrix is at zero tilt.
++				const auto previous = _control_allocation[i]->getActuatorSetpoint();
++				_control_allocation[i]->allocate();
++				_control_allocation[i]->setActuatorSetpoint(previous);
++			}
+ 		}
+ 
+ 		trims.timestamp = hrt_absolute_time();
+@@ -599,6 +682,14 @@ ControlAllocator::publish_control_allocator_status(int matrix_index)
+ 	control_allocator_status_s control_allocator_status{};
+ 	control_allocator_status.timestamp = hrt_absolute_time();
+ 
++	if (_effectiveness_source_id == EffectivenessSource::SHARED_TILT && !_shared_tilt_outputs_enabled) {
++		// The outer loop deliberately inhibited output. Clear any residual from the previous allocation.
++		control_allocator_status.torque_setpoint_achieved = true;
++		control_allocator_status.thrust_setpoint_achieved = true;
++		_control_allocator_status_pub[matrix_index].publish(control_allocator_status);
++		return;
++	}
++
+ 	// TODO: disabled motors (?)
+ 
+ 	// Allocated control
+@@ -648,7 +739,9 @@ ControlAllocator::publish_control_allocator_status(int matrix_index)
+ void
+ ControlAllocator::publish_actuator_controls()
+ {
+-	if (!_publish_controls) {
++	const bool shared_tilt = _effectiveness_source_id == EffectivenessSource::SHARED_TILT;
++
++	if (!_publish_controls && !shared_tilt) {
+ 		return;
+ 	}
+ 
+@@ -675,7 +768,7 @@ ControlAllocator::publish_actuator_controls()
+ 		float actuator_sp = _control_allocation[selected_matrix]->getActuatorSetpoint()(actuator_idx_matrix[selected_matrix]);
+ 		actuator_motors.control[motors_idx] = PX4_ISFINITE(actuator_sp) ? actuator_sp : NAN;
+ 
+-		if (stopped_motors & (1u << motors_idx)) {
++		if ((shared_tilt && !_shared_tilt_outputs_enabled) || (stopped_motors & (1u << motors_idx))) {
+ 			actuator_motors.control[motors_idx] = NAN;
+ 		}
+ 
+@@ -810,6 +903,22 @@ int ControlAllocator::print_status()
+ 		PX4_INFO("Effectiveness Source: %s", _actuator_effectiveness->name());
+ 	}
+ 
++	if (_effectiveness_source_id == EffectivenessSource::SHARED_TILT && _actuator_effectiveness) {
++		const auto &effectiveness = static_cast<const ActuatorEffectivenessSharedTilt &>(*_actuator_effectiveness);
++		PX4_INFO("shared_tilt_angle_rad=%.6f shared_tilt_sample_us=%llu", (double)effectiveness.matrixTilt(),
++			 (unsigned long long)_shared_tilt_sample_us);
++
++		if (_num_control_allocation > 0) {
++			const auto matrix = _control_allocation[0]->getEffectivenessMatrix();
++
++			for (unsigned i = 0; i < 4; ++i) {
++				PX4_INFO_RAW("shared_tilt_motor_%u=%.7f,%.7f,%.7f,%.7f,%.7f,%.7f\n", i,
++					     (double)matrix(0, i), (double)matrix(1, i), (double)matrix(2, i),
++					     (double)matrix(3, i), (double)matrix(4, i), (double)matrix(5, i));
++			}
++		}
++	}
++
+ 	// Print current effectiveness matrix
+ 	for (int i = 0; i < _num_control_allocation; ++i) {
+ 		const ActuatorEffectiveness::EffectivenessMatrix &effectiveness = _control_allocation[i]->getEffectivenessMatrix();
+diff --git a/src/modules/control_allocator/ControlAllocator.hpp b/src/modules/control_allocator/ControlAllocator.hpp
+index ce92c5036b70226c3d5f618f988920b4b9f009be..9ba4a8d5947154a72f404cbc6af21ff1f14e2d9e 100644
+--- a/src/modules/control_allocator/ControlAllocator.hpp
++++ b/src/modules/control_allocator/ControlAllocator.hpp
+@@ -73,6 +73,7 @@
+ #include <uORB/topics/actuator_servos_trim.h>
+ #include <uORB/topics/control_allocator_status.h>
+ #include <uORB/topics/parameter_update.h>
++#include <uORB/topics/shared_tilt_allocation_setpoint.h>
+ #include <uORB/topics/vehicle_control_mode.h>
+ #include <uORB/topics/vehicle_torque_setpoint.h>
+ #include <uORB/topics/vehicle_thrust_setpoint.h>
+@@ -132,6 +133,8 @@ private:
+ 
+ 	void update_effectiveness_matrix_if_needed(EffectivenessUpdateReason reason);
+ 
++	bool update_shared_tilt_setpoint(bool torque_updated);
++
+ 	void check_for_motor_failures();
+ 
+ 	void publish_control_allocator_status(int matrix_index);
+@@ -160,6 +163,7 @@ private:
+ 		HELICOPTER_COAXIAL = 12,
+ 		SPACECRAFT_2D = 13,
+ 		SPACECRAFT_3D = 14,
++		SHARED_TILT = 17,
+ 	};
+ 
+ 	enum class FailureMode {
+@@ -176,6 +180,7 @@ private:
+ 	// Inputs
+ 	uORB::SubscriptionCallbackWorkItem _vehicle_torque_setpoint_sub{this, ORB_ID(vehicle_torque_setpoint)};  /**< vehicle torque setpoint subscription */
+ 	uORB::Subscription _vehicle_thrust_setpoint_sub{ORB_ID(vehicle_thrust_setpoint)};	 /**< vehicle thrust setpoint subscription */
++	uORB::SubscriptionCallbackWorkItem _shared_tilt_setpoint_sub{this, ORB_ID(shared_tilt_allocation_setpoint)};
+ 
+ 	uORB::Subscription _vehicle_torque_setpoint1_sub{ORB_ID(vehicle_torque_setpoint), 1};  /**< vehicle torque setpoint subscription (2. instance) */
+ 	uORB::Subscription _vehicle_thrust_setpoint1_sub{ORB_ID(vehicle_thrust_setpoint), 1};	 /**< vehicle thrust setpoint subscription (2. instance) */
+@@ -196,6 +201,10 @@ private:
+ 	matrix::Vector3f _torque_sp;
+ 	matrix::Vector3f _thrust_sp;
+ 	bool _publish_controls{true};
++	shared_tilt_allocation_setpoint_s _shared_tilt_request{};
++	hrt_abstime _torque_timestamp{0};
++	hrt_abstime _shared_tilt_sample_us{0};
++	bool _shared_tilt_outputs_enabled{false};
+ 
+ 	// Reflects motor failures that are currently handled, not motor failures that are reported.
+ 	// For example, the system might report two motor failures, but only the first one is handled by CA
+diff --git a/src/modules/control_allocator/VehicleActuatorEffectiveness/CMakeLists.txt b/src/modules/control_allocator/VehicleActuatorEffectiveness/CMakeLists.txt
+index 349893a3eaf2b22a1f91846ebdbe4d019d346e30..2b0e392ab1af0d0976538f82d0334f435403b62c 100644
+--- a/src/modules/control_allocator/VehicleActuatorEffectiveness/CMakeLists.txt
++++ b/src/modules/control_allocator/VehicleActuatorEffectiveness/CMakeLists.txt
+@@ -15,6 +15,8 @@ px4_add_library(VehicleActuatorEffectiveness
+ 	ActuatorEffectivenessMCTilt.hpp
+ 	ActuatorEffectivenessMultirotor.cpp
+ 	ActuatorEffectivenessMultirotor.hpp
++	ActuatorEffectivenessSharedTilt.cpp
++	ActuatorEffectivenessSharedTilt.hpp
+ 	ActuatorEffectivenessTilts.cpp
+ 	ActuatorEffectivenessTilts.hpp
+ 	ActuatorEffectivenessRotors.cpp
+diff --git a/src/modules/control_allocator/module.yaml b/src/modules/control_allocator/module.yaml
+index 82d3fb2e12c5be4592491b5def279586ebba2752..48bc0aeba6d0ca22720e2c1505c2267f541632b0 100644
+--- a/src/modules/control_allocator/module.yaml
++++ b/src/modules/control_allocator/module.yaml
+@@ -33,6 +33,7 @@ parameters:
+                 13: Rover (Mecanum)
+                 14: Spacecraft 2D
+                 15: Spacecraft 3D
++                17: Shared-tilt quadrotor
+             default: 0
+ 
+         CA_METHOD:
+diff --git a/src/modules/mavlink/CMakeLists.txt b/src/modules/mavlink/CMakeLists.txt
+index 45aa9b1cc82f90521347203ba5124a1a5f233eba..be109320eac91fffc45ff50a64c9a099d3d46e79 100644
+--- a/src/modules/mavlink/CMakeLists.txt
++++ b/src/modules/mavlink/CMakeLists.txt
+@@ -147,6 +147,8 @@ if(PX4_TESTING)
+ 	add_subdirectory(mavlink_tests)
+ endif()
+ 
++px4_add_unit_gtest(SRC TiltingTunnelTest.cpp)
++
+ px4_add_unit_gtest(SRC MavlinkStatustextHandlerTest.cpp
+ 	INCLUDES
+ 		${MAVLINK_LIBRARY_DIR}
+diff --git a/src/modules/mavlink/mavlink_main.cpp b/src/modules/mavlink/mavlink_main.cpp
+index a08b6f869042e546bb90661973d2e52f699c797b..9e445888ebffcbc0afd6f78a389b3d935a8aaa88 100644
+--- a/src/modules/mavlink/mavlink_main.cpp
++++ b/src/modules/mavlink/mavlink_main.cpp
+@@ -60,6 +60,11 @@
+ #include "mavlink_receiver.h"
+ #include "mavlink_main.h"
+ 
++#ifdef CONFIG_ARCH_BOARD_PX4_SITL
++#include "tilting_tunnel.hpp"
++#include <uORB/topics/tilting_servo_sp.h>
++#endif
++
+ // Guard against MAVLink misconfiguration
+ #ifndef MAVLINK_CRC_EXTRA
+ #error MAVLINK_CRC_EXTRA has to be defined on PX4 systems
+@@ -3338,6 +3343,43 @@ Mavlink::set_boot_complete()
+ 
+ }
+ 
++#ifdef CONFIG_ARCH_BOARD_PX4_SITL
++static int tilt_test_command(int argc, char *argv[])
++{
++	if (argc != 3) {
++		PX4_ERR("usage: mavlink tilt_test <angle_deg>");
++		return PX4_ERROR;
++	}
++
++	char *end = nullptr;
++	const float angle_deg = strtof(argv[2], &end);
++
++	if (end == argv[2] || *end != '\0' || !PX4_ISFINITE(angle_deg)
++	    || fabsf(angle_deg) > tilting_tunnel::command_limit_deg) {
++		PX4_ERR("invalid test angle (degrees, -35 to 35)");
++		return PX4_ERROR;
++	}
++
++	int32_t autostart = 0;
++	vehicle_status_s vehicle_status{};
++	uORB::Subscription status_sub{ORB_ID(vehicle_status)};
++
++	if (param_get(param_find("SYS_AUTOSTART"), &autostart) != PX4_OK || autostart != 22010
++	    || !status_sub.copy(&vehicle_status) || vehicle_status.arming_state != vehicle_status_s::ARMING_STATE_DISARMED) {
++		PX4_ERR("tilt test requires disarmed pitch_decoupled_quad SITL (SYS_AUTOSTART=22010)");
++		return PX4_ERROR;
++	}
++
++	static pthread_mutex_t test_mutex = PTHREAD_MUTEX_INITIALIZER;
++	const LockGuard lock{test_mutex};
++	static uORB::Publication<tilting_servo_sp_s> test_pub{ORB_ID(tilting_servo_setpoint)};
++	tilting_servo_sp_s setpoint{};
++	setpoint.timestamp = hrt_absolute_time();
++	setpoint.angle[0] = math::radians(angle_deg);
++	return test_pub.publish(setpoint) ? PX4_OK : PX4_ERROR;
++}
++#endif
++
+ static void usage()
+ {
+ 
+@@ -3415,6 +3457,11 @@ $ mavlink stream -u 14556 -s HIGHRES_IMU -r 50
+ 	PRINT_MODULE_USAGE_PARAM_STRING('s', nullptr, nullptr, "Mavlink stream to configure", false);
+ 	PRINT_MODULE_USAGE_PARAM_FLOAT('r', -1.0f, 0.0f, 2000.0f, "Rate in Hz (0 = turn off, -1 = set to default)", false);
+ 
++#ifdef CONFIG_ARCH_BOARD_PX4_SITL
++	PRINT_MODULE_USAGE_COMMAND_DESCR("tilt_test", "Publish a single disarmed pitch_decoupled_quad SITL tilt setpoint");
++	PRINT_MODULE_USAGE_ARG("angle_deg", "Joint target in degrees", false);
++#endif
++
+ 	PRINT_MODULE_USAGE_COMMAND_DESCR("boot_complete",
+ 					 "Enable sending of messages. (Must be) called as last step in startup script.");
+ 
+@@ -3443,6 +3490,11 @@ extern "C" __EXPORT int mavlink_main(int argc, char *argv[])
+ 	} else if (!strcmp(argv[1], "stream")) {
+ 		return Mavlink::stream_command(argc, argv);
+ 
++#ifdef CONFIG_ARCH_BOARD_PX4_SITL
++	} else if (!strcmp(argv[1], "tilt_test")) {
++		return tilt_test_command(argc, argv);
++#endif
++
+ 	} else if (!strcmp(argv[1], "boot_complete")) {
+ 		Mavlink::set_boot_complete();
+ 		return 0;
+diff --git a/src/modules/mavlink/mavlink_messages.cpp b/src/modules/mavlink/mavlink_messages.cpp
+index 7d5e23bb6ec993842e7d38492bc0a9dc644d73af..f13a09734b12903af668c9d6c65dc991982f5b78 100644
+--- a/src/modules/mavlink/mavlink_messages.cpp
++++ b/src/modules/mavlink/mavlink_messages.cpp
+@@ -116,6 +116,7 @@
+ #include "streams/SYSTEM_TIME.hpp"
+ #include "streams/TIME_ESTIMATE_TO_TARGET.hpp"
+ #include "streams/TIMESYNC.hpp"
++#include "streams/TUNNEL_TILTING_SERVO.hpp"
+ #include "streams/VFR_HUD.hpp"
+ #include "streams/VIBRATION.hpp"
+ #include "streams/WIND_COV.hpp"
+@@ -384,6 +385,7 @@ static const StreamListItem streams_list[] = {
+ #if defined(OPTICAL_FLOW_RAD_HPP)
+ 	create_stream_list_item<MavlinkStreamOpticalFlowRad>(),
+ #endif // OPTICAL_FLOW_RAD_HPP
++	create_stream_list_item<MavlinkStreamTunnelTiltingServo>(),
+ #if defined(NAMED_VALUE_FLOAT_HPP)
+ 	create_stream_list_item<MavlinkStreamNamedValueFloat>(),
+ #endif // NAMED_VALUE_FLOAT_HPP
+diff --git a/src/modules/mavlink/mavlink_receiver.cpp b/src/modules/mavlink/mavlink_receiver.cpp
+index 48d0b5795e0ece996f4eb11a0ab349f1c3fde1b5..8eac12e3beef8d7082ddebb97e068f282e5badcc 100644
+--- a/src/modules/mavlink/mavlink_receiver.cpp
++++ b/src/modules/mavlink/mavlink_receiver.cpp
+@@ -60,8 +60,12 @@
+ #include "mavlink_command_sender.h"
+ #include "mavlink_main.h"
+ #include "mavlink_receiver.h"
++#include "tilting_tunnel.hpp"
+ 
++#include <containers/LockGuard.hpp>
+ #include <lib/drivers/device/Device.hpp> // For DeviceId union
++#include <uORB/topics/tilting_mc_desired_angles.h>
++#include <uORB/topics/tilting_servo_status.h>
+ 
+ #ifdef CONFIG_NET
+ #define MAVLINK_RECEIVER_NET_ADDED_STACK 1360
+@@ -1989,7 +1993,43 @@ MavlinkReceiver::handle_message_tunnel(mavlink_message_t *msg)
+ 		break;
+ 	}
+ 
++	if ((tunnel.payload_type != tilting_tunnel::pitch_type && tunnel.payload_type != tilting_tunnel::feedback_type)
++	    || _mavlink.get_mode() != Mavlink::MAVLINK_MODE_ONBOARD || msg->sysid != _mavlink.get_system_id()
++	    || msg->compid != MAV_COMP_ID_ONBOARD_COMPUTER || tunnel.target_system != _mavlink.get_system_id()
++	    || tunnel.target_component != _mavlink.get_component_id()) {
++		return;
++	}
++
++	// Onboard MAVLink instances share one tilt input so forwarded packets cannot
++	// independently update the same measurement.
++	static pthread_mutex_t tilt_mutex = PTHREAD_MUTEX_INITIALIZER;
++	const LockGuard lock{tilt_mutex};
++
++	if (tunnel.payload_type == tilting_tunnel::pitch_type) {
++		tilting_mc_desired_angles_s desired_angles{};
++
++		if (tilting_tunnel::decodePitch(tunnel.payload, tunnel.payload_length, desired_angles.pitch_body)) {
++			static uORB::Publication<tilting_mc_desired_angles_s> pitch_pub{ORB_ID(tilting_mc_desired_angles)};
++			desired_angles.timestamp = hrt_absolute_time();
++			pitch_pub.publish(desired_angles);
++		}
+ 
++		return;
++	}
++
++	static tilting_tunnel::Feedback feedback{};
++
++	if (tilting_tunnel::updateFeedback(tunnel.payload, tunnel.payload_length, hrt_absolute_time(), feedback)) {
++		static uORB::Publication<tilting_servo_status_s> status_pub{ORB_ID(tilting_servo_status)};
++		tilting_servo_status_s status{};
++		status.timestamp = feedback.timestamp;
++		status.timestamp_sample = feedback.timestamp_sample;
++		status.angle_rad = feedback.angle_rad;
++		status.sequence = feedback.sequence;
++		status.valid = feedback.valid;
++		status.fault = feedback.fault;
++		status_pub.publish(status);
++	}
+ }
+ 
+ void
+diff --git a/src/modules/simulation/simulator_mavlink/sitl_targets_gazebo-classic.cmake b/src/modules/simulation/simulator_mavlink/sitl_targets_gazebo-classic.cmake
+index 258e18d8b298468f0398c8aa910ae0591baeb7b3..354f93f3b63dbc5d568c81f6447eb0bdb3f88f7d 100644
+--- a/src/modules/simulation/simulator_mavlink/sitl_targets_gazebo-classic.cmake
++++ b/src/modules/simulation/simulator_mavlink/sitl_targets_gazebo-classic.cmake
+@@ -38,6 +38,12 @@ if(gazebo_FOUND)
+ 		set(parallel_jobs 1)
+ 	endif()
+ 
++	if(DEFINED ENV{CMAKE_BUILD_PARALLEL_LEVEL} AND "$ENV{CMAKE_BUILD_PARALLEL_LEVEL}" MATCHES "^[1-9][0-9]*$")
++		if("$ENV{CMAKE_BUILD_PARALLEL_LEVEL}" LESS parallel_jobs)
++			set(parallel_jobs "$ENV{CMAKE_BUILD_PARALLEL_LEVEL}")
++		endif()
++	endif()
++
+ 	# message(DEBUG "${NUMBER_OF_LOGICAL_CORES} logical cores detected and ${AVAILABLE_PHYSICAL_MEMORY} megabytes of memory available.
+ 	# 		Limiting sitl_gazebo concurrent jobs to ${parallel_jobs}")
+ 
+@@ -60,6 +66,16 @@ if(gazebo_FOUND)
+ 		BUILD_COMMAND ${CMAKE_COMMAND} --build <BINARY_DIR> -- -j ${parallel_jobs}
+ 	)
+ 
++	ExternalProject_Add(gazebo-classic-tilt-servo
++		SOURCE_DIR "${PX4_SOURCE_DIR}/Tools/simulation/gazebo-classic/tilt_servo_plugin"
++		BINARY_DIR "${PX4_BINARY_DIR}/build_gazebo-classic_tilt_servo"
++		INSTALL_COMMAND ""
++		USES_TERMINAL_CONFIGURE true
++		USES_TERMINAL_BUILD true
++		EXCLUDE_FROM_ALL true
++		BUILD_ALWAYS true
++	)
++
+ 	# create targets for each model/world/debugger combination
+ 
+ 	set(debuggers
+@@ -91,6 +107,7 @@ if(gazebo_FOUND)
+ 		plane_cam
+ 		plane_catapult
+ 		plane_lidar
++		pitch_decoupled_quad
+ 		px4vision
+ 		quadtailsitter
+ 		r1_rover
+@@ -136,6 +153,10 @@ if(gazebo_FOUND)
+ 		set(model_only)
+ 		string(REGEX REPLACE ".*_gazebo-classic_" "" model_only ${gazebo-classic_airframe})
+ 
++		if(EXISTS "${PX4_SOURCE_DIR}/Tools/simulation/gazebo-classic/models/${model_only}/${model_only}.sdf")
++			continue()
++		endif()
++
+ 		if(EXISTS "${PX4_SOURCE_DIR}/Tools/simulation/gazebo-classic/sitl_gazebo-classic/models/${model_only}")
+ 
+ 			if((EXISTS "${PX4_SOURCE_DIR}/Tools/simulation/gazebo-classic/sitl_gazebo-classic/models/${model_only}/${model_only}.sdf")
+@@ -152,6 +173,11 @@ if(gazebo_FOUND)
+ 
+ 	foreach(debugger ${debuggers})
+ 		foreach(model ${models})
++			set(simulator_dependencies px4 sitl_gazebo-classic)
++
++			if(model STREQUAL "pitch_decoupled_quad")
++				list(APPEND simulator_dependencies gazebo-classic-tilt-servo)
++			endif()
+ 
+ 			# match model to airframe
+ 			set(airframe_model_only)
+@@ -194,7 +220,7 @@ if(gazebo_FOUND)
+ 						COMMAND ${PX4_SOURCE_DIR}/Tools/simulation/gazebo-classic/sitl_run.sh $<TARGET_FILE:px4> ${debugger} ${model} ${world} ${PX4_SOURCE_DIR} ${PX4_BINARY_DIR}
+ 						WORKING_DIRECTORY ${SITL_WORKING_DIR}
+ 						USES_TERMINAL
+-						DEPENDS px4 sitl_gazebo-classic
++						DEPENDS ${simulator_dependencies}
+ 					)
+ 
+ 					string(REPLACE "gazebo-classic" "gazebo" _targ_name_compat ${_targ_name})
+@@ -223,7 +249,7 @@ if(gazebo_FOUND)
+ 						COMMAND ${PX4_SOURCE_DIR}/Tools/simulation/gazebo-classic/sitl_run.sh $<TARGET_FILE:px4> ${debugger} ${model} ${world} ${PX4_SOURCE_DIR} ${PX4_BINARY_DIR}
+ 						WORKING_DIRECTORY ${SITL_WORKING_DIR}
+ 						USES_TERMINAL
+-						DEPENDS px4 sitl_gazebo-classic
++						DEPENDS ${simulator_dependencies}
+ 					)
+ 
+ 					string(REPLACE "gazebo-classic" "gazebo" _targ_name_compat ${_targ_name})

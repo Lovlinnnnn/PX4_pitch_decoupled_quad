@@ -1,0 +1,14 @@
+#!/bin/sh
+#
+# @name Pitch-decoupled quad fixed-body bench (SITL)
+# @type Quadrotor Wide
+# @class Copter
+#
+
+. ${R}etc/init.d-posix/airframes/22010_gazebo-classic_pitch_decoupled_quad
+
+# Keep native preflight checks and leave enough time for the bounded bench run.
+param set-default COM_DISARM_PRFLT 25
+param set-default COM_OBL_RC_ACT 7
+param set-default MC_BAT_SCALE_EN 0
+param set-default THR_MDL_FAC 0

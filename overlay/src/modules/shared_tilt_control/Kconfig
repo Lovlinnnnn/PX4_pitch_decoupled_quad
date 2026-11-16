@@ -1,0 +1,4 @@
+menuconfig MODULES_SHARED_TILT_CONTROL
+	bool "Shared-tilt shadow and fixed SITL bench"
+	default n
+	depends on PLATFORM_POSIX

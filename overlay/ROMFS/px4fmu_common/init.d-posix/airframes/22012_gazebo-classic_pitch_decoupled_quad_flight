@@ -1,0 +1,25 @@
+#!/bin/sh
+#
+# @name Pitch-decoupled quad shared-tilt flight (SITL)
+# @type Quadrotor Wide
+# @class Copter
+#
+
+. ${R}etc/init.d-posix/airframes/22010_gazebo-classic_pitch_decoupled_quad
+
+param set-default CA_AIRFRAME 17
+param set-default CA_METHOD 1
+# Gazebo uses omega = 100 + 1000*u rad/s when armed; normalized thrust above idle is (u + 5*u^2)/6.
+param set-default THR_MDL_FAC 0.833333333
+param set-default MC_BAT_SCALE_EN 0
+param set-default COM_OBL_RC_ACT 4
+param set-default MPC_TKO_RAMP_T 1.5
+param set-default MPC_LAND_SPEED 0.45
+# Classic simulates 1 Pa RMS of pressure noise and no rotor-wash pressure rise.
+# Fuse barometric height with noise appropriate to this model and keep GNSS horizontal position and velocity.
+param set-default EKF2_HGT_REF 0
+param set-default EKF2_GPS_CTRL 5
+param set-default EKF2_BARO_NOISE 0.15
+param set-default EKF2_GND_EFF_DZ 0
+# Calibrate the native land detector's normalized throttle threshold to the SDF hover point.
+param set-default MPC_THR_HOVER 0.52
